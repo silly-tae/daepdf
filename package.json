@@ -1,0 +1,51 @@
+{
+  "name": "daepdf",
+  "version": "1.0.0",
+  "description": "Real PDFs from the layout your browser already rendered. No server, no headless Chrome, no screenshots.",
+  "type": "module",
+  "license": "MIT",
+  "author": "silly-tae",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/silly-tae/daepdf.git"
+  },
+  "homepage": "https://github.com/silly-tae/daepdf#readme",
+  "bugs": {
+    "url": "https://github.com/silly-tae/daepdf/issues"
+  },
+  "keywords": [
+    "html-to-pdf",
+    "html2pdf",
+    "pdf-generation",
+    "pdf",
+    "client-side",
+    "wasm",
+    "typescript",
+    "invoice-pdf",
+    "pdf-library",
+    "document-generation"
+  ],
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check": "npm run typecheck",
+    "prepublishOnly": "npm run check && npm run build"
+  },
+  "devDependencies": {
+    "dts-bundle-generator": "^9.5.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.3"
+  }
+}
