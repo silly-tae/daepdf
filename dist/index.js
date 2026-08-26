@@ -2870,8 +2870,8 @@ ${bparts.join("\n")}`;
 
 // package.json
 var package_default = {
-  name: "daepdf",
-  version: "1.0.0",
+  name: "daeepdf",
+  version: "1.0.1",
   description: "Real PDFs from the layout your browser already rendered. No server, no headless Chrome, no screenshots.",
   type: "module",
   license: "MIT",
@@ -2886,15 +2886,7 @@ var package_default = {
   },
   keywords: [
     "html-to-pdf",
-    "html2pdf",
-    "pdf-generation",
-    "pdf",
-    "client-side",
-    "wasm",
-    "typescript",
-    "invoice-pdf",
-    "pdf-library",
-    "document-generation"
+    "html2pdf"
   ],
   sideEffects: false,
   main: "./dist/index.js",
@@ -2902,17 +2894,22 @@ var package_default = {
   exports: {
     ".": {
       types: "./dist/index.d.ts",
-      import: "./dist/index.js"
-    }
+      import: "./dist/index.js",
+      default: "./dist/index.js"
+    },
+    "./daepl.wasm": "./dist/daepl.wasm"
   },
   files: [
     "dist"
   ],
+  publishConfig: {
+    access: "public"
+  },
   scripts: {
     build: "node build.mjs",
     typecheck: "tsc --noEmit -p tsconfig.json",
     check: "npm run typecheck",
-    prepublishOnly: "npm run check && npm run build"
+    prepack: "npm run check && npm run build"
   },
   devDependencies: {
     "dts-bundle-generator": "^9.5.1",

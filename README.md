@@ -11,7 +11,6 @@ No server. No headless browser. No approximation. What the browser shows is what
 - [How it works](#how-it-works)
 - [Limitations](#limitations)
 - [Installation](#installation)
-  - [Pinning a version](#pinning-a-version)
   - [From a local checkout](#from-a-local-checkout)
   - [Suggested project structure](#suggested-project-structure)
 - [Quick start](#quick-start)
@@ -102,33 +101,19 @@ The package ships as native ES modules, matching its browser-only nature. Every 
 
 ## Installation
 
-daepdf is not on npm. Install it straight from the repository:
-
 ```
-npm install github:silly-tae/daepdf --allow-git=root
+npm i daeepdf
 ```
 
-npm 12 refuses git dependencies unless you allow them, which is why the flag is there. `root` permits the ones you declare yourself while still blocking a transitive dependency from pulling code from a git host. Set it once and drop the flag from later installs:
+The package is published as `daeepdf` – the extra `e` is there because `daepdf` was already taken on npm. The project, the repository and the import's default export are all still daepdf.
 
-```
-npm config set allow-git root
-```
-
-That's it. The build output is committed, so nothing is compiled on your machine and no build tooling is added to your project. No copying source files, no editing `tsconfig.json`, no path aliases.
+That's it. The build output is published, so nothing is compiled on your machine and no build tooling is added to your project. No copying source files, no editing `tsconfig.json`, no path aliases.
 
 ```ts
-import pdf from 'daepdf'
+import pdf from 'daeepdf'
 ```
 
 That single import is all you need. The engine starts warming up automatically the moment this line runs.
-
-### Pinning a version
-
-A bare install tracks the default branch. Point at a tag so an upgrade is always something you chose:
-
-```
-npm install github:silly-tae/daepdf#v1.0.0 --allow-git=root
-```
 
 ### From a local checkout
 
@@ -173,7 +158,7 @@ The template file is the one thing every other piece of your app imports and cal
 Here is the minimum working example – a one-page PDF with a heading and a paragraph:
 
 ```ts
-import pdf from 'daepdf'
+import pdf from 'daeepdf'
 
 const html = `
   <style>
@@ -267,7 +252,7 @@ Always use this on any value from user input that ends up in the filename.
 Escapes a string for safe interpolation into HTML text content or a quoted attribute value. Named export, imported alongside the default `pdf` object:
 
 ```ts
-import pdf, { escapeHtml } from 'daepdf'
+import pdf, { escapeHtml } from 'daeepdf'
 
 escapeHtml(`O'Brien & Sons <b>"bold"</b>`)
 // → "O&#39;Brien &amp; Sons &lt;b&gt;&quot;bold&quot;&lt;/b&gt;"
@@ -327,7 +312,7 @@ A template is a TypeScript function that takes your data and returns an HTML str
 ### Basic structure
 
 ```ts
-import { escapeHtml } from 'daepdf'
+import { escapeHtml } from 'daeepdf'
 
 export function buildDocumentHTML(data: MyData): string {
   return `
@@ -585,7 +570,7 @@ If you use a translation system (i18n), store raw characters in your translation
 daepdf includes a built-in preview renderer. It takes the same HTML string your template produces and renders it as paginated page cards directly in the browser – exactly what the PDF will contain, without exporting first.
 
 ```ts
-import pdf, { previewHTML } from 'daepdf'
+import pdf, { previewHTML } from 'daeepdf'
 
 const container = document.getElementById('preview')!
 const html      = buildInvoiceHTML(data)
@@ -602,7 +587,7 @@ await pdf.download(html, 'A4', 'invoice.pdf')
 **There is no separate "preview version" and "export version" of a document to build or keep in sync.** Your template function (`buildInvoiceHTML`, or whatever you call it) is the only place the document's design lives. Both the live preview and the real export just call it and hand the resulting string to a different daepdf function – `previewHTML` for an on-screen preview, `pdf.download`/`pdf.render` for the real file. If you change the template, both update automatically, because there is only one template to change. A minimal component-style wiring:
 
 ```ts
-import pdf, { previewHTML } from 'daepdf'
+import pdf, { previewHTML } from 'daeepdf'
 import { buildInvoiceHTML } from './invoiceTemplate.js'
 
 function renderPreview() {
@@ -980,7 +965,7 @@ Calling `pdf.download()` directly from a button click works for the simplest cas
 Here is the pattern – create a utility function per document type:
 
 ```ts
-import pdf from 'daepdf'
+import pdf from 'daeepdf'
 import { buildInvoiceHTML } from './invoiceTemplate.js'
 import type { InvoiceData } from './invoiceTemplate.js'
 
@@ -1268,7 +1253,7 @@ The only way the output can differ from the preview is if your CSS uses features
 
 ## TypeScript types
 
-These types are available as named imports from `'daepdf'`:
+These types are available as named imports from `'daeepdf'`:
 
 ```ts
 import type {
@@ -1280,7 +1265,7 @@ import type {
   SecurityPreset,
   SecurityOption,
   RenderExtras,
-} from 'daepdf'
+} from 'daeepdf'
 ```
 
 ### `PageSize`
@@ -1449,7 +1434,7 @@ Add `.page a { color: inherit; text-decoration: none; }` to your template CSS. S
 
 ### "SyntaxError: Importing binding name is not found"
 
-You are importing a named export from `'daepdf'` that is not exported. Check the [TypeScript types](#typescript-types) section for the full list of available named exports, and the [API reference](#api-reference) for functions (`previewHTML`, `renderHTMLtoPDF`, `escapeHtml`). The default export (`pdf`) covers all runtime functionality.
+You are importing a named export from `'daeepdf'` that is not exported. Check the [TypeScript types](#typescript-types) section for the full list of available named exports, and the [API reference](#api-reference) for functions (`previewHTML`, `renderHTMLtoPDF`, `escapeHtml`). The default export (`pdf`) covers all runtime functionality.
 
 ### daepdf causes an error during SSR / server build
 
