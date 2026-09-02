@@ -1,6 +1,6 @@
 {
   "name": "daeepdf",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Real PDFs from the layout your browser already rendered. No server, no headless Chrome, no screenshots.",
   "type": "module",
   "license": "MIT",
