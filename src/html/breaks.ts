@@ -1,16 +1,10 @@
-// Page-break engine: mutates the attached, styled container with marked spacer
-// elements so the browser itself reflows content below each fix — geometry stays
-// truthful because it IS the layout, not a prediction of it. Every mutation is
-// marked with data-tpdf-break and reverted by undoPageBreaks (fromDOM may receive
-// the caller's live element).
-//
-// Policy (browser-print behavior): never slice a text line, image, canvas, SVG,
-// or table row across a page boundary; treat flex/grid containers and explicit
-// break-inside:avoid subtrees as atomic; honor break-before/after: page.
-// Anything taller than one page is left to the geometric MediaBox slicing.
+// Page-break engine. Mutates the attached, styled container with marked spacers
+// so the browser itself reflows the real layout, then undoPageBreaks reverts it
+// all, since fromDOM may be handed the caller's live element.
 
-const BREAK_ATTR = 'data-tpdf-break'
-const MAX_FIXES  = 300
+const BREAK_ATTR  = 'data-tpdf-break'
+const MARGIN_ATTR = 'data-tpdf-break-margin'
+const MAX_FIXES   = 300
 
 interface Violation {
   top:  number
@@ -36,17 +30,30 @@ function avoidsBreakInside(cs: CSSStyleDeclaration): boolean {
   return v === 'avoid' || v === 'avoid-page'
 }
 
-const ATOMIC_TAGS = new Set(['IMG', 'CANVAS', 'SVG', 'TR'])
+const REPLACED_TAGS = new Set(['IMG', 'CANVAS', 'SVG'])
+const ATOMIC_TAGS   = new Set([...REPLACED_TAGS, 'TR'])
 
-function isAtomic(el: Element, cs: CSSStyleDeclaration): boolean {
-  if (ATOMIC_TAGS.has(el.tagName.toUpperCase())) return true
-  if (avoidsBreakInside(cs)) return true
-  // a spacer inside a flex/grid container can't push items down individually
+function isFlexOrGrid(cs: CSSStyleDeclaration): boolean {
   const d = cs.display
   return d === 'flex' || d === 'grid' || d === 'inline-flex' || d === 'inline-grid'
 }
 
-// distance from `top` up to the next page boundary strictly above it
+// Pushed whole when crossing a boundary, as browser print does. One too tall to
+// move is entered instead; only replaced elements are true leaves.
+function isAtomic(el: Element, cs: CSSStyleDeclaration): boolean {
+  if (ATOMIC_TAGS.has(el.tagName.toUpperCase())) return true
+  return avoidsBreakInside(cs) || isFlexOrGrid(cs)
+}
+
+// A sibling spacer between flex/grid children becomes an item of its own and
+// moves nothing, except down a flex column.
+function siblingSpacerMoves(parent: Element): boolean {
+  const cs = getComputedStyle(parent)
+  if (!isFlexOrGrid(cs)) return true
+  return cs.display.endsWith('flex') && cs.flexDirection.startsWith('column')
+}
+
+// distance from `top` down to the next page boundary
 function pushHeight(top: number, containerTop: number, pageHPx: number): number {
   const rel = top - containerTop
   const next = (Math.floor(rel / pageHPx) + 1) * pageHPx
@@ -70,11 +77,15 @@ function makeSpacer(doc: Document, forTag: string, heightPx: number): Element {
 }
 
 // Insert a spacer before `node`, then correct its height once by the residual
-// between where the target actually landed and the intended page top — margin
-// collapse and table row sizing are absorbed exactly instead of predicted.
+// between where the target landed and the intended page top, so margin collapse
+// and table row sizing are absorbed exactly instead of predicted.
 function insertSpacer(node: Node, targetRect: () => DOMRect, containerTop: number, pageHPx: number): boolean {
   const parent = node.parentNode
   if (!parent) return false
+  if (node.nodeType === Node.ELEMENT_NODE && parent.nodeType === Node.ELEMENT_NODE
+      && isFlexOrGrid(getComputedStyle(parent as Element))) {
+    return pushByMargin(node as HTMLElement, targetRect, containerTop, pageHPx)
+  }
   const doc = node.ownerDocument ?? document
   const startTop = targetRect().top
   const h = pushHeight(startTop, containerTop, pageHPx)
@@ -93,31 +104,53 @@ function insertSpacer(node: Node, targetRect: () => DOMRect, containerTop: numbe
     if (newH <= 0.5 || newH >= pageHPx * 1.5) { parent.removeChild(spacer); return false }
     inner.style.height = `${newH}px`
   }
-  // the correction itself must land within tolerance, or this violation would
-  // re-trigger forever — accept whatever landed (better than looping)
+  // wherever the correction landed is accepted; chasing it further could loop
   return true
 }
 
-// C1: repeats a table's own <thead> rows right after a pushed <tr> lands at a
-// new page's top — real browsers do this natively for print; this DOM-
-// mutation engine doesn't get it for free, so it's reproduced explicitly.
-// Called AFTER insertSpacer already placed `tr` at the page boundary — the
-// clone's own natural height pushes `tr` (and everything after it) down by
-// exactly its real rendered height, no synthetic sizing guess needed, unlike
-// insertSpacer's own height correction dance.
-//
-// Cloned as PLAIN <tr> siblings — deliberately NOT wrapped in a new <thead>
-// and NOT given `display: table-header-group`. Either of those gets pulled to
-// the very TOP of the table by the CSS table layout algorithm regardless of
-// DOM position (CSS 2.1 §17.5.2: all header-groups render before all row-
-// groups, unconditionally) — exactly the opposite of "appear at this break
-// point." Plain <tr> elements have no such reordering.
-//
-// Documented limitation: a clone's ancestor is no longer literally <thead>,
-// so an author rule like `thead th { ... }` won't match it — a rule on
-// `th`/a class directly still works fine.
+// Flex/grid items are pushed through their own margin-top, since a sibling
+// spacer would become an item; the row or line grows to fit, as in browser
+// print. Inline !important beats author !important.
+function pushByMargin(el: HTMLElement, targetRect: () => DOMRect, containerTop: number, pageHPx: number): boolean {
+  const startTop = targetRect().top
+  const h = pushHeight(startTop, containerTop, pageHPx)
+  if (h <= 0.5 || h >= pageHPx) return false
+
+  const stashed = el.hasAttribute(MARGIN_ATTR)
+  if (!stashed) el.setAttribute(MARGIN_ATTR, el.getAttribute('style') ?? '')
+  const base  = parseFloat(getComputedStyle(el).marginTop) || 0
+  const apply = (px: number) => el.style.setProperty('margin-top', `${px}px`, 'important')
+  apply(base + h)
+
+  // an item that does not move at all would re-trigger until the fix cap
+  if (targetRect().top - startTop < 0.5) {
+    if (stashed) apply(base)
+    else restoreStyle(el)
+    return false
+  }
+  const intendedRel = (Math.floor((startTop - containerTop) / pageHPx) + 1) * pageHPx
+  const residual    = intendedRel - (targetRect().top - containerTop)
+  if (Math.abs(residual) > 0.5) apply(base + h + residual)
+  return true
+}
+
+// Put back through the attribute, not cssText, so the caller's own
+// serialization survives; an element that had no style attribute gets none.
+function restoreStyle(el: Element): void {
+  const original = el.getAttribute(MARGIN_ATTR) ?? ''
+  el.removeAttribute(MARGIN_ATTR)
+  if (original) { el.setAttribute('style', original); return }
+  // Chrome serializes the style attribute lazily: removing it while the inline
+  // style is still dirty leaves an empty style="" behind, so read it first
+  el.getAttribute('style')
+  el.removeAttribute('style')
+}
+
+// Repeats the table's <thead> rows above a <tr> just pushed to a page top, as
+// browsers do in print. Clones are plain <tr> siblings: a real <thead> or
+// table-header-group would be hoisted to the table's top (CSS 2.1 §17.5.2).
 function repeatThead(tr: Element): void {
-  if (tr.closest('thead')) return // the header's own row crossed — don't repeat it above itself
+  if (tr.closest('thead')) return // a header row must not repeat above itself
   const table = tr.closest('table')
   if (!table) return
   const thead = table.querySelector(':scope > thead') as HTMLTableSectionElement | null
@@ -141,14 +174,14 @@ function crossesBoundary(rect: DOMRect, containerTop: number, pageHPx: number): 
   return Math.floor((topRel + 0.5) / pageHPx) !== Math.floor((botRel - 0.5) / pageHPx)
 }
 
+// symmetric about the boundary: a push can land a hair short of it
 function atPageTop(rect: DOMRect, containerTop: number, pageHPx: number): boolean {
   const rel = (rect.top - containerTop) % pageHPx
-  return rel < 1
+  return rel < 1 || rel > pageHPx - 1
 }
 
-// The earliest (topmost) violation in the container, or null when clean.
-// Only the FIRST violation matters per iteration — fixing it reflows everything
-// below, so later candidates are stale the moment a spacer lands.
+// The topmost violation in the container, or null when clean. Only the first
+// one matters per iteration: fixing it reflows everything below it.
 function findViolation(
   root: HTMLElement, containerTop: number, pageHPx: number, skip: Set<Node>,
 ): Violation | null {
@@ -162,9 +195,8 @@ function findViolation(
 
   const walkEl = (el: Element): void => {
     const cs = getComputedStyle(el)
-    // the root is the capture/measure container — it is position:fixed itself
-    // (createHiddenContainer, previewHTML's measure div), so the out-of-flow
-    // skip must not apply to it, only to its descendants
+    // the root is itself position:fixed (createHiddenContainer, previewHTML),
+    // so the out-of-flow skip applies to descendants only
     if (el !== root) {
       if (cs.display === 'none' || isOutOfFlow(cs)) return
       if (el.hasAttribute(BREAK_ATTR)) return
@@ -189,7 +221,7 @@ function findViolation(
     }
 
     if (isAtomic(el, cs)) {
-      if (crossesBoundary(rect, containerTop, pageHPx)) {
+      if (crossesBoundary(rect, containerTop, pageHPx) && !skip.has(el)) {
         const isRow = el.tagName.toUpperCase() === 'TR'
         const fix = () => {
           const ok = insertSpacer(el, () => el.getBoundingClientRect(), containerTop, pageHPx)
@@ -197,9 +229,12 @@ function findViolation(
           return ok
         }
         consider(rect.top, fix, el)
+        // pushed whole, so the interior is never split
+        return
       }
-      // atomic subtrees are pushed whole — their interior is never split
-      return
+      // too tall to move whole, or unmovable: the walk continues into it so
+      // what is inside is still protected, as browser print does
+      if (REPLACED_TAGS.has(el.tagName.toUpperCase())) return
     }
 
     for (const child of Array.from(el.childNodes)) {
@@ -227,9 +262,8 @@ function findViolation(
   return best
 }
 
-// Split the text node at the start of the crossing line (per-char rect tops)
-// and push that line to the next page top with a block spacer. The line already
-// starts at a word/wrap point, so wrapping is preserved after the push.
+// Split the text node where the crossing line starts and push that line to the
+// next page top; the line already starts at a wrap point, so wrapping survives.
 function fixTextLine(textNode: Text, lineTop: number, containerTop: number, pageHPx: number): boolean {
   const doc   = textNode.ownerDocument ?? document
   const range = doc.createRange()
@@ -244,12 +278,16 @@ function fixTextLine(textNode: Text, lineTop: number, containerTop: number, page
   }
   if (splitAt < 0) return false
 
+  const parent = textNode.parentNode
+  if (!parent) return false
+  // text directly inside a grid or flex row is an anonymous item nothing can
+  // push; it is left where it is rather than split for no gain
+  if (parent.nodeType === Node.ELEMENT_NODE && !siblingSpacerMoves(parent as Element)) return false
+
   let target: Node = textNode
   if (splitAt > 0) target = textNode.splitText(splitAt)
 
-  const parent = target.parentNode
-  if (!parent) return false
-  // inside inline context a div is invalid — a block span behaves identically
+  // a div is invalid in inline context; a block span behaves identically
   const block = doc.createElement('span')
   block.setAttribute(BREAK_ATTR, '')
   block.style.cssText = 'display:block;height:1px;margin:0;padding:0;border:0;'
@@ -276,10 +314,8 @@ function fixTextLine(textNode: Text, lineTop: number, containerTop: number, page
   return true
 }
 
-// C3: the nearest ancestor whose OWN rendering directly produces the line
-// boxes orphans/widows apply against (a paragraph, list item, plain div of
-// text, etc.) — not just any block, but the one this text node's lines
-// actually belong to.
+// The nearest ancestor whose own rendering produces the line boxes that
+// orphans/widows apply to, not merely the nearest block.
 function findLineBlock(node: Node): Element | null {
   let el = node.parentElement
   while (el) {
@@ -290,13 +326,9 @@ function findLineBlock(node: Node): Element | null {
   return null
 }
 
-// Generalizes fixTextLine's own per-character scan across EVERY text node in
-// `block`, not just one — needed when the orphans/widows-adjusted split line
-// falls in a different text node than the one that first reported the
-// crossing (e.g. a paragraph split across a <b>/<i> inline boundary). Once
-// the right node is found, fixTextLine re-derives the exact offset within
-// it independently — a small redundant re-scan, but far simpler than
-// threading a starting offset through.
+// fixTextLine's per-character scan across every text node in `block`: the
+// orphans/widows-adjusted split line can sit in a different text node than the
+// one that reported the crossing (a paragraph split across a <b> boundary).
 function fixLineAcrossBlock(block: Element, targetTop: number, containerTop: number, pageHPx: number): boolean {
   const doc     = block.ownerDocument ?? document
   const walker  = doc.createTreeWalker(block, NodeFilter.SHOW_TEXT)
@@ -315,13 +347,9 @@ function fixLineAcrossBlock(block: Element, targetTop: number, containerTop: num
   return false
 }
 
-// Wraps fixTextLine with orphans/widows enforcement: a block container's
-// `orphans` (minimum lines kept on the FIRST page) and `widows` (minimum
-// lines carried to the NEXT page) can require moving the split point earlier
-// than the naive first-crossing-line detection found — or, if the crossing
-// happens too early in the block for orphans to be satisfiable at all,
-// pushing the WHOLE block instead of splitting it (reusing the exact same
-// atomic-element push path isAtomic() elements already use).
+// Enforces the block's orphans/widows around fixTextLine: the split may have to
+// move earlier than the first crossing line, or, when orphans can't be
+// satisfied at all, the whole block is pushed through the atomic path instead.
 function fixTextLineWithOrphansWidows(textNode: Text, lineTop: number, containerTop: number, pageHPx: number): boolean {
   const block = findLineBlock(textNode)
   if (!block) return fixTextLine(textNode, lineTop, containerTop, pageHPx)
@@ -329,8 +357,8 @@ function fixTextLineWithOrphansWidows(textNode: Text, lineTop: number, container
   const cs      = getComputedStyle(block)
   const orphans = parseInt((cs as any).orphans, 10) || 2
   const widows  = parseInt((cs as any).widows, 10) || 2
-  // fast path: CSS defaults both to 2, so this still runs for the common
-  // case — but only once per actual crossing line, not per line overall
+  // CSS defaults both to 2, so the full path is the common case; it runs once
+  // per crossing line, not per line
   if (orphans <= 1 && widows <= 1) return fixTextLine(textNode, lineTop, containerTop, pageHPx)
 
   const doc = textNode.ownerDocument ?? document
@@ -341,11 +369,10 @@ function fixTextLineWithOrphansWidows(textNode: Text, lineTop: number, container
 
   const N = lineRects.length
   const K = lineRects.findIndex(r => Math.abs(r.top - lineTop) < 1)
-  if (K < 0) return fixTextLine(textNode, lineTop, containerTop, pageHPx) // shouldn't happen — stay safe
+  if (K < 0) return fixTextLine(textNode, lineTop, containerTop, pageHPx) // defensive
 
   if (K < orphans) {
-    // too few lines would remain before the break — can't satisfy orphans by
-    // splitting inside this block at all; push the whole block instead
+    // too few lines would stay behind for orphans; push the whole block instead
     return insertSpacer(block, () => block.getBoundingClientRect(), containerTop, pageHPx)
   }
 
@@ -357,15 +384,9 @@ function fixTextLineWithOrphansWidows(textNode: Text, lineTop: number, container
 
 export function applyPageBreaks(root: HTMLElement, pageHPx: number): void {
   if (pageHPx <= 0) return
-  // single-page content can't cross a boundary via NATURAL overflow — but an
-  // explicit break-before/after/inside can still force a break regardless of
-  // height (e.g. "always start this section on a fresh page" on genuinely
-  // short content), so the skip only holds when no such property could even
-  // be present. A cheap substring check on the container's own markup (a
-  // getComputedStyle-based check per element would cost as much as the walk
-  // itself, defeating the whole point of the fast path) — CSS scoping only
-  // rewrites :root/html/body selectors and wraps in @scope, never touching
-  // property names, so this substring survives scoping intact.
+  // single-page content can't overflow a boundary, but break-before/after/inside
+  // can force one on short content. A substring check is far cheaper than a
+  // getComputedStyle walk, and CSS scoping never rewrites property names.
   const mightBreak = /break-(?:before|after|inside)/.test(root.innerHTML)
   if (!mightBreak && root.scrollHeight <= pageHPx + 0.5) return
 
@@ -376,7 +397,7 @@ export function applyPageBreaks(root: HTMLElement, pageHPx: number): void {
     if (!violation) return
     violation.fix()
   }
-  console.warn('[daepdf] Page-break pass hit the fix cap — layout may still contain cut content.')
+  console.warn('[daepdf] Page-break pass hit the fix cap – layout may still contain cut content.')
 }
 
 export function undoPageBreaks(root: HTMLElement): void {
@@ -388,4 +409,6 @@ export function undoPageBreaks(root: HTMLElement): void {
   }
   // re-merge the text nodes fixTextLine split
   for (const p of parents) p.normalize()
+
+  for (const el of Array.from(root.querySelectorAll(`[${MARGIN_ATTR}]`))) restoreStyle(el)
 }

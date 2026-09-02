@@ -755,8 +755,10 @@ These are never sliced across a page boundary – if one would cross, it's pushe
 
 - Images, `<canvas>`, and inline `<svg>`
 - Table rows (`<tr>`)
-- Flex and grid containers (the whole container moves together, not individual items within it)
+- Flex and grid containers that fit on a page (the whole container moves together, not individual items within it)
 - Any element with `break-inside: avoid` or `break-inside: avoid-page`
+
+A flex or grid container taller than one page can't move as a unit, so daepdf steps inside it instead: an image, table row, or `break-inside: avoid` item that would otherwise be cut is pushed down within its own row or line, which grows to make room – the same thing a browser does when printing a tall grid. `break-before` and `break-after` on flex and grid items are honored the same way.
 
 ### Explicit break control
 
